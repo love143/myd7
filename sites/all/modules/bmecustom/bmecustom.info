@@ -1,0 +1,6 @@
+name = BmE Custom Code
+description = Enables the use of Byte my Eye custom code snippets.
+package = Core
+version = VERSION
+core = 7.x
+

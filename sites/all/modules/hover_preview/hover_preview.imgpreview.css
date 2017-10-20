@@ -1,0 +1,9 @@
+#hover-preview-imgpreview {
+  background:#fff url(loading.gif) no-repeat center;
+  -moz-border-radius:0px;
+  -webkit-border-radius:10px;
+  border-radius: 0px;
+  padding: 6px;
+  z-index: 999;
+  border: none;
+}

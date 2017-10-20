@@ -1,0 +1,15 @@
+name = Commerce Invoice PDF
+description = Generate PDFs for invoices
+package = Commerce (contrib)
+core = 7.x
+
+dependencies[] = commerce_invoice
+dependencies[] = libraries
+dependencies[] = xautoload
+
+; Information added by Drupal.org packaging script on 2017-10-02
+version = "7.x-2.x-dev"
+core = "7.x"
+project = "commerce_invoice"
+datestamp = "1506938347"
+

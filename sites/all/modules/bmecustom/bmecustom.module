@@ -1,0 +1,21 @@
+<?php	
+ 
+/**
+ * Implementation of hook_form_alter().
+ * @see http://api.drupal.org/api/function/hook_form_alter
+ * We add a few custom fields to the default Drupal contact form
+ */
+/**
+* Implements hook_form_contact_site_form_alter().
+* This function will add a phone number field to the site-wide contact form,
+* by implementing hook_form_FORM_ID_alter().
+*/
+
+function bmecustom_admin_paths_alter(&$paths) {
+  // Treat all user pages as administrative.
+  $paths['user'] = TRUE;
+  $paths['user/*'] = TRUE;
+  // Treat the forum topic node form as a non-administrative page.
+  $paths['node/add/forum'] = FALSE;
+}
+

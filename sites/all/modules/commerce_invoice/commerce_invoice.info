@@ -1,0 +1,24 @@
+name = Commerce invoice
+description = Generate invoices for Commerce orders
+package = Commerce (contrib)
+core = 7.x
+php = 5.5.9
+
+dependencies[] = date
+dependencies[] = entity
+dependencies[] = commerce
+dependencies[] = commerce:commerce_line_item
+dependencies[] = commerce:commerce_order
+dependencies[] = commerce:commerce_price
+dependencies[] = inline_entity_form
+dependencies[] = token
+dependencies[] = xautoload
+
+files[] = tests/commerce_invoice.test
+
+; Information added by Drupal.org packaging script on 2017-10-02
+version = "7.x-2.x-dev"
+core = "7.x"
+project = "commerce_invoice"
+datestamp = "1506938347"
+

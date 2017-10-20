@@ -1,0 +1,141 @@
+diff --git a/commerce_discount.module b/commerce_discount.module
+index 127ab02..d3b7a97 100644
+--- a/commerce_discount.module
++++ b/commerce_discount.module
+@@ -28,7 +28,7 @@ function commerce_discount_commerce_cart_order_refresh(EntityDrupalWrapper $orde
+   commerce_discount_remove_discount_components($order_wrapper->commerce_order_total);
+ 
+   foreach ($order_wrapper->commerce_line_items as $delta => $wrapper_line_item) {
+-    if ($wrapper_line_item->getBundle() == 'product_discount') {
++    if (in_array($wrapper_line_item->getBundle(), array('product_discount', 'commerce_discount'))) {
+       // Delete the line item, and remove it from the order.
+       $line_items_to_delete[] = $wrapper_line_item->line_item_id->value();
+       $order_wrapper->commerce_line_items->offsetUnset($delta);
+diff --git a/commerce_discount.rules.inc b/commerce_discount.rules.inc
+index 1e0bee5..42e255d 100644
+--- a/commerce_discount.rules.inc
++++ b/commerce_discount.rules.inc
+@@ -420,6 +420,12 @@ function commerce_discount_rules_event_info() {
+     'access callback' => 'commerce_order_rules_access',
+   );
+ 
++  $items['commerce_discount_order_discount_line_item'] = array(
++    'label' => t('Adding or updating an order discount line item'),
++    'group' => t('Commerce Discount'),
++    'variables' => entity_rules_events_variables('commerce_line_item', t('Line item'), array(), array('context' => 'a drupal commerce line item')),
++  );
++
+   return $items;
+ }
+ 
+@@ -1366,6 +1372,8 @@ function commerce_discount_add_line_item(EntityDrupalWrapper $order_wrapper, $di
+   // Add the discount price component.
+   commerce_discount_add_price_component($discount_line_item_wrapper, $discount_name, $discount_amount);
+ 
++  rules_invoke_event('commerce_discount_order_discount_line_item', $discount_line_item);
++
+   // Save the incoming line item now so we get its ID.
+   commerce_line_item_save($discount_line_item);
+   // Add it to the order's line item reference value.
+@@ -1524,6 +1532,7 @@ function commerce_discount_set_existing_line_item_price(EntityDrupalWrapper $ord
+       $line_item = $line_item_wrapper->value();
+       if (isset($line_item->data['discount_name']) && $line_item->data['discount_name'] == $discount_name) {
+         commerce_discount_set_price_component($line_item_wrapper, $discount_name, $discount_price);
++        rules_invoke_event('commerce_discount_order_discount_line_item', $line_item);
+         $line_item_wrapper->save();
+         $modified_existing = TRUE;
+       }
+diff --git a/commerce_discount.rules_defaults.inc b/commerce_discount.rules_defaults.inc
+index 3d21d7c..6950464 100644
+--- a/commerce_discount.rules_defaults.inc
++++ b/commerce_discount.rules_defaults.inc
+@@ -83,5 +83,31 @@ function commerce_discount_default_rules_configuration() {
+     }
+   }
+ 
++  if (module_exists('commerce_tax')) {
++    $rule = rules_reaction_rule();
++
++    $rule->event('commerce_discount_order_discount_line_item');
++
++    $rule->label = t('Calculate taxes on order discounts');
++    $rule->active = 1;
++    $rule->weight = 10;
++    $rule->tags = array('Commerce Discount');
++
++    $rule->condition('data_is', array(
++      'data:select' => 'commerce-line-item:type',
++      'op' => '==',
++      'value' => 'commerce_discount',
++    ));
++
++    foreach (commerce_tax_types() as $tax_type_name => $tax_type) {
++      $rule->action('commerce_tax_calculate_by_type', array(
++        'commerce_line_item:select' => 'commerce-line-item',
++        'tax_type_name' => $tax_type_name,
++      ));
++    }
++
++    $rules['commerce_discount_calculate_taxes_on_order_discounts'] = $rule;
++  }
++
+   return $rules;
+ }
+diff --git a/tests/commerce_discount.test b/tests/commerce_discount.test
+index 5159429..ab1c262 100644
+--- a/tests/commerce_discount.test
++++ b/tests/commerce_discount.test
+@@ -114,6 +114,53 @@ class CommerceDiscountTest extends CommerceDiscountTestBase {
+   }
+ 
+   /**
++   * Test fixed order discounts with taxes.
++   */
++  public function testCommerceDiscountFixedOrderDiscountAndTaxes() {
++    module_enable(array('commerce_tax', 'commerce_tax_ui'));
++
++    // Set up a tax rate.
++    $tax_rate = commerce_tax_ui_tax_rate_new('sales_tax');
++    $tax_rate['name'] = 'sales_tax_test';
++    $tax_rate['title'] = 'Sales Tax Test';
++    $tax_rate['rate'] = 0.2;
++    commerce_tax_ui_tax_rate_save($tax_rate);
++    commerce_tax_rates_reset();
++
++    $discount = $this->createDiscount('order_discount', 'fixed_amount', 300);
++    $order = $this->createDummyOrder($this->store_customer->uid, array($this->product->product_id => 1), 'completed');
++    $order_wrapper = commerce_cart_order_refresh($order);
++
++    $discount_line_item_total = $order_wrapper->commerce_line_items->get(1)->commerce_total->value();
++
++    // Check if the discount line item has a tax component.
++    $this->assertTrue(isset($discount_line_item_total['data']['components'][2]), 'Discount line item has a tax component.');
++
++    // Check if the discount line item's tax component amount is correct.
++    $this->assertEqual($discount_line_item_total['data']['components'][2]['price']['amount'], 300 * $tax_rate['rate'] * -1, 'Discount line item has the correct tax amount.');
++
++    // Check that the order total is correct.
++    $this->assertEqual($order_wrapper->commerce_order_total->amount->value(), (1000 - 300) * (1 + $tax_rate['rate']), 'Commerce order total includes tax that is calculated post-discount.');
++
++    // Disable the discount.
++    $discount->status = FALSE;
++    entity_save('commerce_discount', $discount);
++
++    // Re-save the order.
++    $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
++    $order_wrapper->save();
++
++    // Recalculate discounts.
++    $order_wrapper = commerce_cart_order_refresh($order);
++
++    // Make sure that the order line item was removed.
++    $this->assertFalse(isset($order->commerce_line_items[1]), 'The discount line item has been removed.');
++
++    // Check if the order total is still correct without the discount applied.
++    $this->assertTrue($order_wrapper->commerce_order_total->amount->value() == (1000 * (1 + $tax_rate['rate'])), "Fixed order discount is removed when it's not applicable and the correct tax is applied.");
++  }
++
++  /**
+    * Test percentage order discounts.
+    */
+   public function testCommerceDiscountPercentageOrderDiscount() {

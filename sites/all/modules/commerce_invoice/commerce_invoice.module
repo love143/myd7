@@ -1,0 +1,534 @@
+<?php
+
+/**
+ * @file
+ * The Commerce Invoice module.
+ */
+
+use Drupal\commerce_invoice\Entity\Invoice;
+use Drupal\commerce_invoice\Entity\InvoiceController;
+use Drupal\commerce_invoice\Entity\InvoiceMetadataController;
+use Drupal\commerce_invoice\Entity\InvoiceNumberPattern;
+use Drupal\commerce_invoice\InvoiceNumber\InvoiceNumber;
+
+/**
+ * Implements hook_entity_info().
+ */
+function commerce_invoice_entity_info() {
+  $entities = [];
+
+  $entities['commerce_invoice'] = [
+    'label' => t('Invoice'),
+    'base table' => 'commerce_invoice',
+    'revision table' => 'commerce_invoice_revision',
+    'fieldable' => TRUE,
+    'entity keys' => [
+      'id' => 'invoice_id',
+      'bundle' => 'type',
+      'revision' => 'revision_id',
+    ],
+    'bundles' => [
+      'commerce_invoice' => [
+        'label' => t('Invoice'),
+        'admin' => [
+          'path' => 'admin/commerce/config/invoice',
+          'access arguments' => ['administer commerce_invoice entities'],
+        ],
+      ],
+    ],
+    'entity class' => Invoice::class,
+    'controller class' => InvoiceController::class,
+    'metadata controller class' => InvoiceMetadataController::class,
+    'views controller class' => 'EntityDefaultViewsController',
+    'access callback' => 'commerce_entity_access',
+    'access arguments' => [
+      'user key' => 'uid',
+      'access tag' => 'commerce_invoice_access',
+    ],
+    'permission labels' => [
+      'singular' => t('invoice'),
+      'plural' => t('invoices'),
+    ],
+    'label callback' => 'entity_class_label',
+    'uri callback' => 'entity_class_uri',
+    'module' => 'commerce_invoice',
+    'admin ui' => [
+      'controller class' => 'EntityContentUIController',
+      'path' => 'admin/commerce/invoices',
+      'file' => 'commerce_invoice.admin.inc',
+    ],
+  ];
+
+  $entities['commerce_invoice_number_pattern'] = [
+    'label' => t('Invoice number pattern'),
+    'base table' => 'commerce_invoice_number_pattern',
+    'controller class' => 'EntityAPIControllerExportable',
+    'entity class' => InvoiceNumberPattern::class,
+    'entity keys' => [
+      'id' => 'name',
+      'name' => 'name',
+      'label' => 'label',
+      'status' => 'status',
+    ],
+    'exportable' => TRUE,
+    'fieldable' => FALSE,
+    'module' => 'commerce_invoice',
+    'access callback' => 'commerce_invoice_number_pattern_access',
+    'views controller class' => 'EntityDefaultViewsController',
+    'admin ui' => [
+      'path' => 'admin/commerce/config/invoice/numbers',
+      'file' => 'commerce_invoice.admin.inc',
+    ],
+  ];
+
+  return $entities;
+}
+
+/**
+ * Access callback for invoice number patterns.
+ *
+ * @return bool
+ */
+function commerce_invoice_number_pattern_access() {
+  return user_access('administer commerce_invoice entities');
+}
+
+/**
+ * Checks invoice access for various operations.
+ *
+ * @param string      $op
+ *   The operation being performed. One of 'view', 'update', 'create' or
+ *   'delete'.
+ * @param object|NULL $invoice
+ *   Optionally an invoice to check access for.
+ * @param object|NULL $account
+ *   The user to check for. Leave it to NULL to check for the current user.
+ *
+ * @return bool
+ */
+function commerce_invoice_access($op, $invoice = NULL, $account = NULL) {
+  return commerce_entity_access($op, $invoice, $account, 'commerce_invoice');
+}
+
+/**
+ * Implements hook_query_TAG_alter().
+ *
+ * @param \QueryAlterableInterface $query
+ */
+function commerce_invoice_query_commerce_invoice_access_alter(QueryAlterableInterface $query) {
+  commerce_entity_access_query_alter($query, 'commerce_invoice');
+}
+
+/**
+ * Implements hook_permission().
+ */
+function commerce_invoice_permission() {
+  return commerce_entity_access_permissions('commerce_invoice');
+}
+
+/**
+ * A list of invoice statuses.
+ *
+ * @return string<string>
+ *   Invoice statuses keyed by their machine name (one of the Invoice::STATUS_
+ *   constants).
+ */
+function commerce_invoice_statuses() {
+  $statuses = [
+    Invoice::STATUS_PENDING => t('Pending'),
+    Invoice::STATUS_PAID => t('Paid'),
+    Invoice::STATUS_CANCELED => t('Canceled'),
+    Invoice::STATUS_REFUND_PENDING => t('Pending refund'),
+    Invoice::STATUS_REFUNDED => t('Refunded'),
+  ];
+
+  drupal_alter(__FUNCTION__, $statuses);
+
+  return $statuses;
+}
+
+/**
+ * Load an invoice number pattern by machine name.
+ *
+ * @param string $name
+ *
+ * @return InvoiceNumberPattern|FALSE
+ */
+function commerce_invoice_number_pattern_load($name) {
+  $patterns = entity_load_multiple_by_name('commerce_invoice_number_pattern', [$name]);
+
+  return reset($patterns);
+}
+
+/**
+ * Implements hook_default_commerce_invoice_number_pattern().
+ */
+function commerce_invoice_default_commerce_invoice_number_pattern() {
+  $entity_type = 'commerce_invoice_number_pattern';
+  $patterns = [];
+
+  $patterns['consecutive'] = entity_create($entity_type, [
+    'name' => 'consecutive',
+    'label' => 'Consecutive',
+    'pattern' => InvoiceNumber::SEQUENCE_TOKEN,
+  ]);
+
+  $patterns['daily'] = entity_create($entity_type, [
+    'name' => 'daily',
+    'label' => 'Daily',
+    'pattern' => '[date:custom:Y]-[date:custom:m]-[date:custom:d]',
+  ]);
+
+  $patterns['monthly'] = entity_create($entity_type, [
+    'name' => 'monthly',
+    'label' => 'Monthly',
+    'pattern' => '[date:custom:Y]-[date:custom:m]',
+  ]);
+
+  $patterns['yearly'] = entity_create($entity_type, [
+    'name' => 'yearly',
+    'label' => 'Yearly',
+    'pattern' => '[date:custom:Y]',
+  ]);
+
+  return $patterns;
+}
+
+/**
+ * Implements hook_theme().
+ */
+function commerce_invoice_theme() {
+  return [
+    'commerce_invoice_number' => [
+      'variables' => [
+        'invoice_number' => NULL,
+        'key' => NULL,
+        'pattern_name' => NULL,
+        'sequence' => NULL,
+        'sanitize' => TRUE,
+      ],
+      'file' => 'commerce_invoice.theme.inc',
+    ],
+  ];
+}
+
+/**
+ * Implements hook_views_api().
+ */
+function commerce_invoice_views_api() {
+  return ['api' => 3];
+}
+
+/**
+ * Create a new invoice based on a Commerce order.
+ *
+ * @param object                    $order
+ *   A Commerce order.
+ * @param InvoiceNumberPattern|NULL $pattern
+ *   An invoice number pattern.
+ * @param bool                      $cancel_existing
+ *   Cancel existing invoices for the order.
+ * @param string                    $status
+ *   Override the default invoice status
+ *
+ * @return Invoice
+ *   A saved invoice entity.
+ */
+function commerce_invoice_create_from_order($order, InvoiceNumberPattern $pattern = NULL, $cancel_existing = TRUE, $status = NULL) {
+  $invoice = commerce_invoice_object_prepare_from_order($order, $pattern);
+
+  if ($cancel_existing) {
+    $existing = commerce_invoice_load_for_order($order);
+  }
+
+  if ($status) {
+    $invoice->invoice_status = $status;
+  }
+
+  $invoice->save();
+
+  if ($cancel_existing && !empty($existing)) {
+    $log = t('A new invoice was created for the same order: number @number, ID @id', [
+      '@id' => $invoice->invoice_id,
+      '@number' => $invoice->getInvoiceNumber()->__toString(),
+    ]);
+    foreach ($existing as $previous) {
+      switch ($previous->invoice_status) {
+        // Request refund for previously paid invoices.
+        case Invoice::STATUS_PAID:
+          $previous->invoice_status = Invoice::STATUS_REFUND_PENDING;
+          // @todo: Issue a credit note. A rule? A hook? A custom module?
+          break;
+        // Cancel pending invoices.
+        case Invoice::STATUS_PENDING:
+          $previous->invoice_status = Invoice::STATUS_CANCELED;
+          break;
+      }
+      $previous->log = $log;
+      $previous->save();
+    }
+  }
+
+  return $invoice;
+}
+
+/**
+ * Prepares the invoice object but does not save it, nor it manipulates
+ * other invoices related to the given order.
+ */
+function commerce_invoice_object_prepare_from_order($order, InvoiceNumberPattern $pattern = NULL) {
+  /** @var Invoice $invoice */
+  $invoice = entity_create('commerce_invoice', []);
+  $invoice->order_id = $order->order_id;
+  $invoice->order_revision_id = $order->revision_id;
+  $invoice->uid = $order->uid;
+  $invoice->log = t('Created from order @id', ['@id' => $order->order_id]);
+  $invoice->revision = TRUE;
+  $pattern = $pattern ?: InvoiceNumberPattern::getDefault();
+  $invoice->number_pattern = $pattern->name;
+
+  $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+  foreach ($order_wrapper->commerce_line_items->value() as $line_item) {
+    $invoice_item = clone $line_item;
+    $invoice_item->line_item_id = NULL;
+    commerce_line_item_save($invoice_item);
+    $invoice->wrapper()->commerce_invoice_items[] = $invoice_item;
+  }
+
+  // Copy the billing address.
+  $address = $order_wrapper->commerce_customer_billing->commerce_customer_address->value();
+  $invoice->wrapper()->commerce_invoice_address->set($address);
+
+  $invoice->wrapper()->commerce_invoice_total = $order_wrapper->commerce_order_total->value();
+
+  return $invoice;
+}
+
+/**
+ * Determine whether an order has changed since its current invoice.
+ *
+ * @param object $order
+ *   The Commerce order object.
+ *
+ * @return bool
+ *   TRUE if the order has changed since the current invoice, FALSE otherwise.
+ */
+function commerce_invoice_order_changed($order) {
+  $invoice = commerce_invoice_load_current($order);
+  if (!$invoice) {
+    return TRUE;
+  }
+
+  // @todo this needs to be actually logical...
+  $order_wrapper = entity_metadata_wrapper('commerce_order', $order);
+  $total_changed = $invoice->wrapper()->commerce_invoice_total->value() != $order_wrapper->commerce_order_total->value();
+
+  return $total_changed;
+}
+
+/**
+ * Load the current invoice for an order.
+ *
+ * @param object $order
+ *
+ * @return Invoice|FALSE
+ */
+function commerce_invoice_load_current($order) {
+  $invoices = commerce_invoice_load_for_order($order, [['invoice_status', Invoice::STATUS_CANCELED, '<>']], 1, 'created', TRUE);
+
+  return reset($invoices);
+}
+
+/**
+ * Load the existing invoices for an order.
+ *
+ * @param object      $order
+ *   The Commerce order object.
+ * @param array       $properties
+ *   Properties to filter invoices by. Each property should be an array of 3
+ *   elements: name, value, and operator.
+ * @param int         $limit
+ *   Limit the number of invoices to return, or 0 for no limit.
+ * @param string|NULL $sort
+ *   A property to sort invoices by, or NULL for no sorting.
+ * @param bool        $descending
+ *   Leave FALSE to sort ascending. Set TRUE to sort in descending order.
+ *
+ * @return Invoice[]
+ *   The order's invoices or an empty array if none are found.
+ */
+function commerce_invoice_load_for_order($order, array $properties = [], $limit = 0, $sort = NULL, $descending = FALSE) {
+  $query = new EntityFieldQuery();
+  $query->entityCondition('entity_type', 'commerce_invoice');
+  $query->propertyCondition('order_id', $order->order_id);
+  foreach ($properties as $property) {
+    list($column, $value, $operator) = $property;
+    $query->propertyCondition($column, $value, $operator);
+  }
+  if ($sort !== NULL) {
+    $query->propertyOrderBy($sort, $descending ? 'DESC' : 'ASC');
+  }
+  if (!empty($limit)) {
+    $query->range(0, $limit);
+  }
+  $result = $query->execute();
+
+  return !empty($result['commerce_invoice'])
+    ? entity_load('commerce_invoice', array_keys($result['commerce_invoice']))
+    : [];
+}
+
+/**
+ * Implements hook_menu().
+ */
+function commerce_invoice_menu() {
+  $items = [];
+
+  $items['admin/commerce/config/invoice'] = [
+    'title' => 'Invoice settings',
+    'description' => 'Configure fields and other settings for invoices.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['commerce_invoice_settings_form'],
+    'access arguments' => ['administer commerce_invoice entities'],
+    'file' => 'commerce_invoice.admin.inc',
+  ];
+
+  $items['invoices/%entity_object'] = [
+    'load arguments' => ['commerce_invoice'],
+    'title callback' => 'commerce_invoice_title',
+    'title arguments' => [1],
+    'page callback' => 'entity_ui_entity_page_view',
+    'page arguments' => [1],
+    'access callback' => 'entity_access',
+    'access arguments' => ['view', 'commerce_invoice', 1],
+  ];
+
+  $items['admin/commerce/orders/%/invoices/create'] = [
+    'title' => 'Create invoice',
+    'description' => 'Create an invoice for the given order.',
+    'page callback' => 'drupal_get_form',
+    'page arguments' => ['commerce_invoice_create_from_order_form', 3],
+    'access arguments' => ['administer commerce_invoice entities'],
+    'file' => 'commerce_invoice.admin.inc',
+    'type' => MENU_LOCAL_ACTION
+  ];
+
+  return $items;
+}
+
+/**
+ * Menu title callback for an invoice.
+ *
+ * @param Invoice $invoice
+ *
+ * @return string
+ */
+function commerce_invoice_title(Invoice $invoice) {
+  return t('Invoice @number', ['@number' => $invoice->getInvoiceNumber()->__toString()]);
+}
+
+/**
+ * Ensure required fields are present on invoices.
+ */
+function commerce_invoice_ensure_fields() {
+  module_load_include('inc', 'commerce_invoice', 'commerce_invoice.fields');
+  foreach (commerce_invoice_required_field_bases() as $field) {
+    if (!field_info_field($field['field_name'])) {
+      field_create_field($field);
+    }
+  }
+
+  foreach (commerce_invoice_required_field_instances() as $instance) {
+    if (!field_info_instance($instance['entity_type'], $instance['field_name'], $instance['bundle'])) {
+      field_create_instance($instance);
+    }
+  }
+}
+
+/**
+ * Returns a list of invoice number patterns.
+ *
+ * @return array
+ *   Invoice number pattern labels, keyed by machine name.
+ */
+function commerce_invoice_number_pattern_options_list() {
+  $pattern_options = [];
+  foreach (entity_load('commerce_invoice_number_pattern') as $pattern) {
+    $pattern_options[$pattern->name] = $pattern->label;
+  }
+
+  return $pattern_options;
+}
+
+/**
+ * Calculates the invoice total.
+ *
+ * @param Invoice $invoice
+ *   The invoice object whose order total should be calculated.
+ */
+function commerce_invoice_calculate_total(Invoice $invoice) {
+  $wrapper = $invoice->wrapper();
+
+  // No items - no need to calculate anything.
+  if (!$wrapper->commerce_invoice_items->count()) {
+    return;
+  }
+
+  // Use first item's currency code.
+  $currency_code = $wrapper->commerce_invoice_items->get(0)->commerce_total->currency_code->value();
+
+  $wrapper->commerce_invoice_total->amount = 0;
+  $wrapper->commerce_invoice_total->currency_code = $currency_code;
+  $base_price = array(
+    'amount' => 0,
+    'currency_code' => $currency_code,
+    'data' => array(),
+  );
+  $wrapper->commerce_invoice_total->data = commerce_price_component_add($base_price, 'base_price', $base_price, TRUE);
+  $invoice_total = $wrapper->commerce_invoice_total->value();
+
+  foreach ($wrapper->commerce_invoice_items as $delta => $line_item_wrapper) {
+    // Do not allow invoices with mixed currencies.
+    if ($currency_code != $line_item_wrapper->commerce_total->currency_code->value()) {
+      $wrapper->commerce_line_items->offsetUnset($delta);
+      continue;
+    }
+
+    $line_item_total = $line_item_wrapper->commerce_total->value();
+    $component_total = commerce_price_component_total($line_item_total);
+    // Add the totals.
+    $wrapper->commerce_invoice_total->amount = $wrapper->commerce_invoice_total->amount->value()+$component_total['amount'];
+    // Combine the line item total's component prices into the order total.
+    $invoice_total['data'] = commerce_price_components_combine($invoice_total, $line_item_total);
+  }
+
+  $wrapper->commerce_invoice_total->data = $invoice_total['data'];
+}
+
+/**
+ * Suggests invoice status for a given order, considering previous invoice's
+ * status (given the previous invoice exists)
+ */
+function _commerce_invoice_suggest_invoice_status($order) {
+  /** @var Invoice $previous_invoice */
+  $previous_invoice = commerce_invoice_load_current($order);
+  if ($previous_invoice) {
+    $new_status = $previous_invoice->invoice_status;
+    // @todo: if previous invoice's status was STATUS_PAID but new invoice's total
+    //    will differ (i.e.  order total changed since last invoice was issued)
+    //    new status should be STATUS_PENDING.
+  }
+  else {
+    switch ($order->status) {
+      case 'completed':
+        $new_status = Invoice::STATUS_PAID;
+        break;
+      case 'canceled':
+        $new_status = Invoice::STATUS_CANCELED;
+        break;
+      default:
+        $new_status = Invoice::STATUS_PENDING;
+    }
+  }
+  return $new_status;
+}
